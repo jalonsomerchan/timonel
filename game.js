@@ -3,16 +3,19 @@ const WATER_URL = 'https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}.
 const WATER_SUBDOMAINS = ['a', 'b', 'c', 'd'];
 const EARTH_RADIUS = 6378137;
 const MAX_ZOOM = 18;
-const START_ZOOM = 15;
+const START_ZOOM = 16;
 const PLACE_ZOOM = 17;
 const SPEED_MULTIPLIER = 12;
 const TURN_ACCEL_DEG = 58;
 const MAX_YAW_DEG = 44;
 const WATER_SAMPLE_INTERVAL = 360;
-const OSM_PORT_RADIUS_M = 45000;
+const OSM_PORT_RADIUS_M = 130000;
 const OSM_PORT_REFRESH_M = 18000;
 const OVERPASS_URL = 'https://overpass-api.de/api/interpreter';
 const GROUND_ESCAPE_ANGLE_DEG = 35;
+const MIN_PORT_SEPARATION_M = 20000;
+const MIN_MISSION_DISTANCE_M = 50000;
+const FUEL_BURN_MULTIPLIER = 4;
 const SAVE_KEY = 'boat-map-save-v2';
 const ARES = L.latLng(43.424399, -8.23971);
 
@@ -316,10 +319,14 @@ function getBoat() {
 }
 
 function allPorts() {
-  const ports = new Map();
-  BASE_PORTS.forEach((port) => ports.set(port.id, port));
-  state.osmPorts.forEach((port) => ports.set(port.id, port));
-  return [...ports.values()];
+  const accepted = [];
+  [...BASE_PORTS, ...state.osmPorts].forEach((port) => {
+    const isTooClose = accepted.some((kept) => distanceMeters(getPortLatLng(kept), getPortLatLng(port)) < MIN_PORT_SEPARATION_M);
+    if (!isTooClose) {
+      accepted.push(port);
+    }
+  });
+  return accepted;
 }
 
 function getPort(id) {
@@ -363,6 +370,7 @@ function availableMissions() {
   return allPorts()
     .filter((port) => port.id !== currentPort.id)
     .map((port) => ({ port, distance: distanceMeters(getPortLatLng(currentPort), getPortLatLng(port)) }))
+    .filter((item) => item.distance >= MIN_MISSION_DISTANCE_M)
     .sort((a, b) => a.distance - b.distance)
     .slice(0, 4)
     .map((item, index) => missionSeed(currentPort, item.port, index + 1, boat));
@@ -538,9 +546,15 @@ function normalizeOsmPorts(elements) {
 }
 
 function mergeOsmPorts(newPorts) {
-  const byId = new Map(state.osmPorts.map((port) => [port.id, port]));
-  newPorts.forEach((port) => byId.set(port.id, port));
-  state.osmPorts = [...byId.values()]
+  const accepted = [...BASE_PORTS, ...state.osmPorts];
+  newPorts.forEach((port) => {
+    const isTooClose = accepted.some((kept) => distanceMeters(getPortLatLng(kept), getPortLatLng(port)) < MIN_PORT_SEPARATION_M);
+    if (!isTooClose) {
+      accepted.push(port);
+    }
+  });
+  state.osmPorts = accepted
+    .filter((port) => port.source === 'osm')
     .sort((a, b) => distanceMeters(state.boatLatLng, getPortLatLng(a)) - distanceMeters(state.boatLatLng, getPortLatLng(b)))
     .slice(0, 120);
 }
@@ -868,7 +882,7 @@ async function tick(now) {
     if (effectiveSpeed > 0.01) {
       state.boatLatLng = next;
       map.panTo(next, { animate: false });
-      const burn = boat.fuelBurn * Math.max(0.18, Math.abs(state.throttle)) * deltaSeconds * (1 + Math.abs(state.rudder) * 0.22);
+      const burn = boat.fuelBurn * FUEL_BURN_MULTIPLIER * Math.max(0.18, Math.abs(state.throttle)) * deltaSeconds * (1 + Math.abs(state.rudder) * 0.22);
       state.fuel = clamp(state.fuel - burn, 0, boat.fuelMax);
       if (state.fuel <= 0.01) {
         state.throttle = 0;
