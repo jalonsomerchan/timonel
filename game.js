@@ -3,11 +3,14 @@ const WATER_URL = 'https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}.
 const WATER_SUBDOMAINS = ['a', 'b', 'c', 'd'];
 const EARTH_RADIUS = 6378137;
 const MAX_ZOOM = 18;
-const TURN_ACCEL_DEG = 34;
-const MAX_YAW_DEG = 30;
+const START_ZOOM = 17;
+const PLACE_ZOOM = 17;
+const SPEED_MULTIPLIER = 12;
+const TURN_ACCEL_DEG = 58;
+const MAX_YAW_DEG = 44;
 const WATER_SAMPLE_INTERVAL = 360;
 const SAVE_KEY = 'boat-map-save-v2';
-const ARES = L.latLng(43.426485, -8.23205);
+const ARES = L.latLng(43.424399, -8.23971);
 
 const BOATS = {
   yacht: {
@@ -15,7 +18,7 @@ const BOATS = {
     name: 'Yate',
     cargoType: 'pasajeros',
     capacity: 12,
-    maxSpeed: 183.6,
+    maxSpeed: 13.6 * SPEED_MULTIPLIER,
     fuelMax: 520,
     fuelBurn: 0.030,
     sprite: 'assets/boats/yacht/yacht',
@@ -26,7 +29,7 @@ const BOATS = {
     name: 'Lancha',
     cargoType: 'pasajeros',
     capacity: 6,
-    maxSpeed: 22.5,
+    maxSpeed: 22.5 * SPEED_MULTIPLIER,
     fuelMax: 260,
     fuelBurn: 0.050,
     sprite: 'assets/boats/speedboat/speedboat',
@@ -37,7 +40,7 @@ const BOATS = {
     name: 'Barco de carga',
     cargoType: 'mercancia',
     capacity: 180,
-    maxSpeed: 8.8,
+    maxSpeed: 8.8 * SPEED_MULTIPLIER,
     fuelMax: 1500,
     fuelBurn: 0.046,
     sprite: 'assets/boats/cargo/cargo',
@@ -48,7 +51,7 @@ const BOATS = {
     name: 'Transatlántico',
     cargoType: 'pasajeros',
     capacity: 420,
-    maxSpeed: 10.8,
+    maxSpeed: 10.8 * SPEED_MULTIPLIER,
     fuelMax: 2200,
     fuelBurn: 0.058,
     sprite: 'assets/boats/oceanliner/oceanliner',
@@ -99,7 +102,7 @@ const map = L.map('map', {
   worldCopyJump: true,
   inertia: true,
   preferCanvas: false,
-}).setView(ARES, 15);
+}).setView(ARES, START_ZOOM);
 
 L.tileLayer(SATELLITE_URL, {
   maxZoom: MAX_ZOOM,
@@ -383,8 +386,8 @@ function loadGame() {
     state.money = Number(payload.money) || 0;
     state.mission = payload.mission || null;
     state.currentPortId = payload.currentPortId || null;
-    state.velocityMps = Number(payload.velocityMps) || 0;
-    state.yawVelocity = Number(payload.yawVelocity) || 0;
+    state.velocityMps = clamp(Number(payload.velocityMps) || 0, -BOATS[payload.boatId].maxSpeed * 0.38, BOATS[payload.boatId].maxSpeed);
+    state.yawVelocity = clamp(Number(payload.yawVelocity) || 0, -MAX_YAW_DEG, MAX_YAW_DEG);
     return true;
   } catch (error) {
     return false;
@@ -412,7 +415,7 @@ function startGame(useSave) {
   }
   state.started = true;
   startModal.classList.add('is-hidden');
-  map.setView(state.boatLatLng, 15, { animate: false });
+  map.setView(state.boatLatLng, START_ZOOM, { animate: false });
   renderFleet();
   renderDock();
   updatePortState();
@@ -453,7 +456,7 @@ async function placeBoat(latLng) {
   state.boatLatLng = latLng;
   state.currentPortId = null;
   setAnchored(false);
-  map.setView(latLng, Math.max(map.getZoom(), 15), { animate: true });
+  map.setView(latLng, Math.max(map.getZoom(), PLACE_ZOOM), { animate: true });
   saveSoon();
 }
 
@@ -704,7 +707,7 @@ async function tick(now) {
 
   state.rudder += (state.targetRudder - state.rudder) * 0.18;
   const targetSpeed = targetSpeedMps();
-  const acceleration = targetSpeed === 0 ? 2.2 : targetSpeed > state.velocityMps ? 1.25 : 1.85;
+  const acceleration = targetSpeed === 0 ? 28 : targetSpeed > state.velocityMps ? 18 : 24;
   const speedDelta = clamp(targetSpeed - state.velocityMps, -acceleration * deltaSeconds, acceleration * deltaSeconds);
   state.velocityMps += speedDelta;
   if (Math.abs(state.velocityMps) < 0.025 && targetSpeed === 0) {
