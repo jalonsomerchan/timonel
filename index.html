@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+    <meta name="theme-color" content="#071014">
+    <title>Puertos del Mundo</title>
+    <link rel="preconnect" href="https://unpkg.com">
+    <link rel="preconnect" href="https://server.arcgisonline.com">
+    <link rel="preconnect" href="https://a.basemaps.cartocdn.com">
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIINfQh8yY6i1T9+iWbMZ1F8i6m9wL1u/ig="
+      crossorigin="">
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <main id="game">
+      <div id="map" aria-label="Mapa satélite de navegación"></div>
+
+      <div class="hud hud-top">
+        <button id="fleetButton" class="icon-button" type="button" aria-label="Abrir flota">▣</button>
+        <div class="readout">
+          <span id="zoneLabel">Puerto de Ares</span>
+          <strong id="speedLabel">0.0 kn</strong>
+        </div>
+        <button id="anchorButton" class="icon-button is-on" type="button" aria-label="Anclar o soltar barco">⚓</button>
+      </div>
+
+      <aside id="statusPanel" class="status-panel" aria-label="Estado del barco">
+        <div>
+          <span id="boatNameLabel">Yate</span>
+          <strong id="moneyLabel">€0</strong>
+        </div>
+        <div class="meter">
+          <i id="fuelBar"></i>
+        </div>
+        <small id="cargoLabel">Sin carga</small>
+      </aside>
+
+      <button id="gps" class="gps" type="button" aria-label="Abrir mapa GPS">
+        <span id="gpsArrow">➤</span>
+        <small id="gpsLabel">Sin destino</small>
+      </button>
+
+      <div id="boatLayer" class="boat-layer is-visible" aria-hidden="true">
+        <img id="boatSprite" class="boat-sprite" src="assets/boats/yacht/yacht-1.png" alt="">
+        <span id="wake" class="wake"></span>
+      </div>
+
+      <section class="dock-panel" id="dockPanel" aria-label="Puerto">
+        <header>
+          <span id="portLabel">Ares</span>
+          <button id="closeDockButton" class="tiny-button" type="button" aria-label="Cerrar puerto">×</button>
+        </header>
+        <div class="dock-actions">
+          <button id="fuelButton" type="button">Repostar</button>
+          <button id="missionsButton" type="button">Misiones</button>
+        </div>
+        <div id="missionsList" class="missions-list"></div>
+      </section>
+
+      <section id="fleetPanel" class="fleet-panel" aria-label="Selección de barco">
+        <header>
+          <span>Flota</span>
+          <button id="closeFleetButton" class="tiny-button" type="button" aria-label="Cerrar flota">×</button>
+        </header>
+        <div id="fleetList" class="fleet-list"></div>
+      </section>
+
+      <section class="controls-panel" aria-label="Controles de navegación">
+        <div class="throttle-wrap">
+          <span>MAX</span>
+          <div id="throttle" class="throttle" role="slider" aria-label="Palanca de velocidad" aria-valuemin="-1" aria-valuemax="1" aria-valuenow="0" tabindex="0">
+            <div class="throttle-track"></div>
+            <div id="throttleKnob" class="throttle-knob"></div>
+            <em></em>
+          </div>
+          <span>ATRÁS</span>
+        </div>
+        <div class="helm-wrap">
+          <div class="helm-data">
+            <span id="headingLabel">000°</span>
+            <span id="coordLabel">--</span>
+          </div>
+          <div id="helm" class="helm" role="slider" aria-label="Timón" aria-valuemin="-1" aria-valuemax="1" aria-valuenow="0" tabindex="0">
+            <div class="helm-rim">
+              <span></span><span></span><span></span><span></span>
+              <div id="helmWheel" class="helm-wheel">
+                <i></i><i></i><i></i><i></i>
+                <b></b>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="startModal" class="start-modal" aria-label="Inicio de partida">
+        <div class="start-box">
+          <h1>Puertos del Mundo</h1>
+          <p>Navega desde Ares, acepta encargos y vuelve a puerto antes de quedarte sin combustible.</p>
+          <div class="start-actions">
+            <button id="continueButton" type="button">Continuar</button>
+            <button id="newGameButton" type="button">Nueva partida</button>
+          </div>
+        </div>
+      </section>
+
+      <section id="gpsModal" class="gps-modal is-hidden" aria-label="Mapa GPS">
+        <div class="gps-box">
+          <header>
+            <span id="gpsMapTitle">Ruta</span>
+            <button id="closeGpsButton" class="tiny-button" type="button" aria-label="Cerrar mapa GPS">×</button>
+          </header>
+          <div id="gpsMap" class="gps-map"></div>
+          <small id="gpsMapInfo">Sin destino activo</small>
+        </div>
+      </section>
+
+      <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    </main>
+
+    <script
+      src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+      integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+      crossorigin=""></script>
+    <script src="game.js"></script>
+  </body>
+</html>
