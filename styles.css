@@ -504,6 +504,22 @@ button {
   background: radial-gradient(circle at 35% 30%, #f7ce6a, #946221 64%, #3b210e 65%);
 }
 
+.escape-control {
+  width: min(190px, 46vw);
+  display: grid;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1;
+  pointer-events: auto;
+}
+
+.escape-control input {
+  width: 100%;
+  height: 18px;
+  accent-color: var(--accent-2);
+}
+
 .throttle-wrap {
   align-self: end;
   width: 72px;

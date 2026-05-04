@@ -3,12 +3,15 @@ const WATER_URL = 'https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}.
 const WATER_SUBDOMAINS = ['a', 'b', 'c', 'd'];
 const EARTH_RADIUS = 6378137;
 const MAX_ZOOM = 18;
-const START_ZOOM = 17;
+const START_ZOOM = 15;
 const PLACE_ZOOM = 17;
 const SPEED_MULTIPLIER = 12;
 const TURN_ACCEL_DEG = 58;
 const MAX_YAW_DEG = 44;
 const WATER_SAMPLE_INTERVAL = 360;
+const OSM_PORT_RADIUS_M = 45000;
+const OSM_PORT_REFRESH_M = 18000;
+const OVERPASS_URL = 'https://overpass-api.de/api/interpreter';
 const SAVE_KEY = 'boat-map-save-v2';
 const ARES = L.latLng(43.424399, -8.23971);
 
@@ -59,7 +62,7 @@ const BOATS = {
   },
 };
 
-const PORTS = [
+const BASE_PORTS = [
   { id: 'ares', name: 'Ares', lat: 43.4261, lng: -8.2457, radius: 760 },
   { id: 'mugardos', name: 'Mugardos', lat: 43.4592, lng: -8.2541, radius: 680 },
   { id: 'ferrol', name: 'Ferrol', lat: 43.4794, lng: -8.2427, radius: 900 },
@@ -83,7 +86,12 @@ const state = {
   money: 650,
   mission: null,
   currentPortId: 'ares',
+  osmPorts: [],
+  lastOsmFetchLatLng: null,
+  osmFetchInFlight: false,
   dockOpen: true,
+  grounded: false,
+  escapeAngle: 35,
   lastTime: performance.now(),
   lastWaterCheck: 0,
   lastWater: true,
@@ -120,6 +128,8 @@ const helm = document.getElementById('helm');
 const helmWheel = document.getElementById('helmWheel');
 const throttle = document.getElementById('throttle');
 const throttleKnob = document.getElementById('throttleKnob');
+const escapeAngle = document.getElementById('escapeAngle');
+const escapeLabel = document.getElementById('escapeLabel');
 const speedLabel = document.getElementById('speedLabel');
 const headingLabel = document.getElementById('headingLabel');
 const coordLabel = document.getElementById('coordLabel');
@@ -304,8 +314,15 @@ function getBoat() {
   return BOATS[state.boatId];
 }
 
+function allPorts() {
+  const ports = new Map();
+  BASE_PORTS.forEach((port) => ports.set(port.id, port));
+  state.osmPorts.forEach((port) => ports.set(port.id, port));
+  return [...ports.values()];
+}
+
 function getPort(id) {
-  return PORTS.find((port) => port.id === id);
+  return allPorts().find((port) => port.id === id);
 }
 
 function getPortLatLng(port) {
@@ -316,7 +333,7 @@ function findDockedPort() {
   if (!state.boatLatLng) {
     return null;
   }
-  return PORTS.find((port) => distanceMeters(state.boatLatLng, getPortLatLng(port)) <= port.radius);
+  return allPorts().find((port) => distanceMeters(state.boatLatLng, getPortLatLng(port)) <= port.radius);
 }
 
 function missionSeed(fromPort, targetPort, index, boat) {
@@ -342,7 +359,7 @@ function availableMissions() {
     return [];
   }
 
-  return PORTS
+  return allPorts()
     .filter((port) => port.id !== currentPort.id)
     .map((port) => ({ port, distance: distanceMeters(getPortLatLng(currentPort), getPortLatLng(port)) }))
     .sort((a, b) => a.distance - b.distance)
@@ -362,6 +379,8 @@ function saveGame() {
     money: state.money,
     mission: state.mission,
     currentPortId: state.currentPortId,
+    osmPorts: state.osmPorts,
+    escapeAngle: state.escapeAngle,
     velocityMps: state.velocityMps,
     yawVelocity: state.yawVelocity,
     savedAt: Date.now(),
@@ -386,6 +405,8 @@ function loadGame() {
     state.money = Number(payload.money) || 0;
     state.mission = payload.mission || null;
     state.currentPortId = payload.currentPortId || null;
+    state.osmPorts = Array.isArray(payload.osmPorts) ? payload.osmPorts.slice(0, 120) : [];
+    state.escapeAngle = clamp(Number(payload.escapeAngle) || 35, 0, 75);
     state.velocityMps = clamp(Number(payload.velocityMps) || 0, -BOATS[payload.boatId].maxSpeed * 0.38, BOATS[payload.boatId].maxSpeed);
     state.yawVelocity = clamp(Number(payload.yawVelocity) || 0, -MAX_YAW_DEG, MAX_YAW_DEG);
     return true;
@@ -402,9 +423,13 @@ function newGame() {
   state.money = 650;
   state.mission = null;
   state.currentPortId = 'ares';
+  state.osmPorts = [];
+  state.lastOsmFetchLatLng = null;
   state.throttle = 0;
   state.velocityMps = 0;
   state.yawVelocity = 0;
+  state.grounded = false;
+  state.escapeAngle = 35;
   state.anchored = true;
   state.dockOpen = true;
 }
@@ -420,7 +445,9 @@ function startGame(useSave) {
   renderDock();
   updatePortState();
   updateBoatAsset();
+  updateEscapeControl();
   updateReadouts();
+  discoverPortsNearBoat(true);
   saveGame();
 }
 
@@ -429,6 +456,11 @@ function showToast(message) {
   toast.textContent = message;
   toast.classList.add('is-visible');
   state.toastTimer = window.setTimeout(() => toast.classList.remove('is-visible'), 1800);
+}
+
+function updateEscapeControl() {
+  escapeAngle.value = String(state.escapeAngle);
+  escapeLabel.textContent = `Salida ${Math.round(state.escapeAngle)}°`;
 }
 
 function setAnchored(value) {
@@ -462,7 +494,7 @@ async function placeBoat(latLng) {
 
 function renderPorts() {
   portLayer.clearLayers();
-  PORTS.forEach((port) => {
+  allPorts().forEach((port) => {
     const isTarget = state.mission && state.mission.to === port.id;
     const isCurrent = state.currentPortId === port.id;
     const circle = L.circle([port.lat, port.lng], {
@@ -476,6 +508,103 @@ function renderPorts() {
     circle.bindTooltip(port.name, { direction: 'top', opacity: 0.92 });
     circle.addTo(portLayer);
   });
+}
+
+function osmPortName(tags, fallback) {
+  return tags.name || tags['name:es'] || tags['name:en'] || tags.harbour || tags.seamark_name || fallback;
+}
+
+function osmElementLatLng(element) {
+  if (typeof element.lat === 'number' && typeof element.lon === 'number') {
+    return { lat: element.lat, lng: element.lon };
+  }
+  if (element.center && typeof element.center.lat === 'number' && typeof element.center.lon === 'number') {
+    return { lat: element.center.lat, lng: element.center.lon };
+  }
+  return null;
+}
+
+function normalizeOsmPorts(elements) {
+  return elements
+    .map((element) => {
+      const position = osmElementLatLng(element);
+      if (!position) {
+        return null;
+      }
+      const tags = element.tags || {};
+      const fallback = tags.leisure === 'marina' ? 'Marina' : tags.amenity === 'ferry_terminal' ? 'Terminal ferry' : 'Puerto';
+      return {
+        id: `osm-${element.type}-${element.id}`,
+        name: osmPortName(tags, fallback),
+        lat: position.lat,
+        lng: position.lng,
+        radius: tags.leisure === 'marina' ? 520 : 760,
+        source: 'osm',
+      };
+    })
+    .filter(Boolean)
+    .filter((port) => Number.isFinite(port.lat) && Number.isFinite(port.lng));
+}
+
+function mergeOsmPorts(newPorts) {
+  const byId = new Map(state.osmPorts.map((port) => [port.id, port]));
+  newPorts.forEach((port) => byId.set(port.id, port));
+  state.osmPorts = [...byId.values()]
+    .sort((a, b) => distanceMeters(state.boatLatLng, getPortLatLng(a)) - distanceMeters(state.boatLatLng, getPortLatLng(b)))
+    .slice(0, 120);
+}
+
+async function discoverPortsNearBoat(force = false) {
+  if (state.osmFetchInFlight || !state.boatLatLng) {
+    return;
+  }
+  if (!force && state.lastOsmFetchLatLng && distanceMeters(state.boatLatLng, state.lastOsmFetchLatLng) < OSM_PORT_REFRESH_M) {
+    return;
+  }
+
+  state.osmFetchInFlight = true;
+  state.lastOsmFetchLatLng = L.latLng(state.boatLatLng.lat, state.boatLatLng.lng);
+  const { lat, lng } = state.boatLatLng;
+  const query = `
+    [out:json][timeout:14];
+    (
+      node(around:${OSM_PORT_RADIUS_M},${lat},${lng})["leisure"="marina"];
+      way(around:${OSM_PORT_RADIUS_M},${lat},${lng})["leisure"="marina"];
+      relation(around:${OSM_PORT_RADIUS_M},${lat},${lng})["leisure"="marina"];
+      node(around:${OSM_PORT_RADIUS_M},${lat},${lng})["harbour"];
+      way(around:${OSM_PORT_RADIUS_M},${lat},${lng})["harbour"];
+      relation(around:${OSM_PORT_RADIUS_M},${lat},${lng})["harbour"];
+      node(around:${OSM_PORT_RADIUS_M},${lat},${lng})["amenity"="ferry_terminal"];
+      way(around:${OSM_PORT_RADIUS_M},${lat},${lng})["amenity"="ferry_terminal"];
+      relation(around:${OSM_PORT_RADIUS_M},${lat},${lng})["amenity"="ferry_terminal"];
+      node(around:${OSM_PORT_RADIUS_M},${lat},${lng})["seamark:type"="harbour"];
+      way(around:${OSM_PORT_RADIUS_M},${lat},${lng})["seamark:type"="harbour"];
+      relation(around:${OSM_PORT_RADIUS_M},${lat},${lng})["seamark:type"="harbour"];
+    );
+    out tags center 80;
+  `;
+
+  try {
+    const response = await fetch(`${OVERPASS_URL}?data=${encodeURIComponent(query)}`);
+    if (!response.ok) {
+      throw new Error(`Overpass ${response.status}`);
+    }
+    const data = await response.json();
+    const discovered = normalizeOsmPorts(data.elements || []);
+    if (discovered.length) {
+      mergeOsmPorts(discovered);
+      renderPorts();
+      renderDock();
+      if (!state.mission && state.currentPortId) {
+        renderMissions(missionsList.classList.contains('is-open'));
+      }
+      saveSoon();
+    }
+  } catch (error) {
+    console.warn('OSM port discovery failed', error);
+  } finally {
+    state.osmFetchInFlight = false;
+  }
 }
 
 function renderFleet() {
@@ -640,6 +769,8 @@ function updateReadouts() {
   const port = getPort(state.currentPortId);
   if (port) {
     zoneLabel.textContent = `Puerto de ${port.name}`;
+  } else if (state.grounded) {
+    zoneLabel.textContent = 'Varado';
   } else {
     zoneLabel.textContent = state.lastWater ? 'Agua abierta' : 'Costa';
   }
@@ -661,6 +792,7 @@ function updateReadouts() {
 
   throttleKnob.style.top = `${50 - state.throttle * 42}%`;
   throttle.setAttribute('aria-valuenow', state.throttle.toFixed(2));
+  updateEscapeControl();
 }
 
 function currentSpeedMps() {
@@ -725,9 +857,24 @@ async function tick(now) {
 
   const speedMps = currentSpeedMps();
   if (Math.abs(speedMps) > 0.05) {
-    const heading = speedMps >= 0 ? state.heading : wrapDegrees(state.heading + 180);
-    const next = latLngFromDistance(state.boatLatLng, heading, Math.abs(speedMps) * deltaSeconds);
-    if (await checkNextWater(next) || findDockedPort()) {
+    const baseHeading = speedMps >= 0 ? state.heading : wrapDegrees(state.heading + 180);
+    const normalNext = latLngFromDistance(state.boatLatLng, baseHeading, Math.abs(speedMps) * deltaSeconds);
+    const canSailNormally = await checkNextWater(normalNext) || findDockedPort();
+    let next = normalNext;
+    let effectiveSpeed = Math.abs(speedMps);
+
+    if (!canSailNormally) {
+      state.grounded = true;
+      const steer = Math.abs(state.rudder) > 0.08 ? Math.sign(state.rudder) : 1;
+      const escapeHeading = wrapDegrees(baseHeading + steer * state.escapeAngle);
+      effectiveSpeed = Math.min(Math.abs(speedMps), boat.maxSpeed * 0.08);
+      state.velocityMps = Math.sign(speedMps) * effectiveSpeed;
+      next = latLngFromDistance(state.boatLatLng, escapeHeading, effectiveSpeed * deltaSeconds);
+    } else {
+      state.grounded = false;
+    }
+
+    if (effectiveSpeed > 0.01) {
       state.boatLatLng = next;
       map.panTo(next, { animate: false });
       const burn = boat.fuelBurn * Math.max(0.18, Math.abs(state.throttle)) * deltaSeconds * (1 + Math.abs(state.rudder) * 0.22);
@@ -737,15 +884,13 @@ async function tick(now) {
         state.velocityMps = 0;
         showToast('Sin combustible. Busca puerto para repostar.');
       }
-    } else {
-      state.velocityMps = 0;
-      state.throttle = 0;
     }
   }
 
   helmWheel.style.transform = `rotate(${state.targetRudder * 78}deg)`;
   helm.setAttribute('aria-valuenow', state.targetRudder.toFixed(2));
   updatePortState();
+  discoverPortsNearBoat(false);
   updateBoatVisual(deltaMs);
   updateReadouts();
   saveTick(now);
@@ -901,8 +1046,25 @@ throttle.addEventListener('keydown', (event) => {
   }
 });
 
+escapeAngle.addEventListener('input', () => {
+  state.escapeAngle = clamp(Number(escapeAngle.value) || 0, 0, 75);
+  updateEscapeControl();
+  saveSoon();
+});
+
 map.on('click', (event) => {
   placeBoat(event.latlng);
+});
+
+map.on('moveend', () => {
+  if (!state.started) {
+    return;
+  }
+  const center = map.getCenter();
+  const previousPosition = state.boatLatLng;
+  state.boatLatLng = center;
+  discoverPortsNearBoat(false);
+  state.boatLatLng = previousPosition;
 });
 
 anchorButton.addEventListener('click', () => setAnchored(!state.anchored));
