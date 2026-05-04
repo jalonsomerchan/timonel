@@ -12,6 +12,7 @@ const WATER_SAMPLE_INTERVAL = 360;
 const OSM_PORT_RADIUS_M = 45000;
 const OSM_PORT_REFRESH_M = 18000;
 const OVERPASS_URL = 'https://overpass-api.de/api/interpreter';
+const GROUND_ESCAPE_ANGLE_DEG = 35;
 const SAVE_KEY = 'boat-map-save-v2';
 const ARES = L.latLng(43.424399, -8.23971);
 
@@ -25,6 +26,7 @@ const BOATS = {
     fuelMax: 520,
     fuelBurn: 0.030,
     sprite: 'assets/boats/yacht/yacht',
+    spriteScale: 1.05,
     color: '#f2c85b',
   },
   speedboat: {
@@ -36,6 +38,7 @@ const BOATS = {
     fuelMax: 260,
     fuelBurn: 0.050,
     sprite: 'assets/boats/speedboat/speedboat',
+    spriteScale: 0.72,
     color: '#ff6f61',
   },
   cargo: {
@@ -47,6 +50,7 @@ const BOATS = {
     fuelMax: 1500,
     fuelBurn: 0.046,
     sprite: 'assets/boats/cargo/cargo',
+    spriteScale: 1.42,
     color: '#44d4ca',
   },
   oceanliner: {
@@ -58,6 +62,7 @@ const BOATS = {
     fuelMax: 2200,
     fuelBurn: 0.058,
     sprite: 'assets/boats/oceanliner/oceanliner',
+    spriteScale: 1.72,
     color: '#d8eef0',
   },
 };
@@ -91,7 +96,6 @@ const state = {
   osmFetchInFlight: false,
   dockOpen: true,
   grounded: false,
-  escapeAngle: 35,
   lastTime: performance.now(),
   lastWaterCheck: 0,
   lastWater: true,
@@ -128,13 +132,10 @@ const helm = document.getElementById('helm');
 const helmWheel = document.getElementById('helmWheel');
 const throttle = document.getElementById('throttle');
 const throttleKnob = document.getElementById('throttleKnob');
-const escapeAngle = document.getElementById('escapeAngle');
-const escapeLabel = document.getElementById('escapeLabel');
 const speedLabel = document.getElementById('speedLabel');
 const headingLabel = document.getElementById('headingLabel');
 const coordLabel = document.getElementById('coordLabel');
 const zoneLabel = document.getElementById('zoneLabel');
-const anchorButton = document.getElementById('anchorButton');
 const fleetButton = document.getElementById('fleetButton');
 const toast = document.getElementById('toast');
 const startModal = document.getElementById('startModal');
@@ -380,7 +381,6 @@ function saveGame() {
     mission: state.mission,
     currentPortId: state.currentPortId,
     osmPorts: state.osmPorts,
-    escapeAngle: state.escapeAngle,
     velocityMps: state.velocityMps,
     yawVelocity: state.yawVelocity,
     savedAt: Date.now(),
@@ -406,7 +406,6 @@ function loadGame() {
     state.mission = payload.mission || null;
     state.currentPortId = payload.currentPortId || null;
     state.osmPorts = Array.isArray(payload.osmPorts) ? payload.osmPorts.slice(0, 120) : [];
-    state.escapeAngle = clamp(Number(payload.escapeAngle) || 35, 0, 75);
     state.velocityMps = clamp(Number(payload.velocityMps) || 0, -BOATS[payload.boatId].maxSpeed * 0.38, BOATS[payload.boatId].maxSpeed);
     state.yawVelocity = clamp(Number(payload.yawVelocity) || 0, -MAX_YAW_DEG, MAX_YAW_DEG);
     return true;
@@ -429,7 +428,6 @@ function newGame() {
   state.velocityMps = 0;
   state.yawVelocity = 0;
   state.grounded = false;
-  state.escapeAngle = 35;
   state.anchored = true;
   state.dockOpen = true;
 }
@@ -445,7 +443,6 @@ function startGame(useSave) {
   renderDock();
   updatePortState();
   updateBoatAsset();
-  updateEscapeControl();
   updateReadouts();
   discoverPortsNearBoat(true);
   saveGame();
@@ -458,11 +455,6 @@ function showToast(message) {
   state.toastTimer = window.setTimeout(() => toast.classList.remove('is-visible'), 1800);
 }
 
-function updateEscapeControl() {
-  escapeAngle.value = String(state.escapeAngle);
-  escapeLabel.textContent = `Salida ${Math.round(state.escapeAngle)}°`;
-}
-
 function setAnchored(value) {
   state.anchored = value;
   if (value) {
@@ -470,7 +462,6 @@ function setAnchored(value) {
     state.velocityMps = 0;
     state.yawVelocity = 0;
   }
-  anchorButton.classList.toggle('is-on', value);
   boatLayer.classList.toggle('is-sailing', !value && Math.abs(state.throttle) > 0.02 && state.fuel > 0);
   saveSoon();
 }
@@ -735,6 +726,7 @@ function updateBoatAsset() {
   boatSprite.src = `${boat.sprite}-1.png`;
   boatNameLabel.textContent = boat.name;
   document.documentElement.style.setProperty('--accent-boat', boat.color);
+  document.documentElement.style.setProperty('--boat-scale', boat.spriteScale);
 }
 
 function updatePortState() {
@@ -792,7 +784,6 @@ function updateReadouts() {
 
   throttleKnob.style.top = `${50 - state.throttle * 42}%`;
   throttle.setAttribute('aria-valuenow', state.throttle.toFixed(2));
-  updateEscapeControl();
 }
 
 function currentSpeedMps() {
@@ -866,7 +857,7 @@ async function tick(now) {
     if (!canSailNormally) {
       state.grounded = true;
       const steer = Math.abs(state.rudder) > 0.08 ? Math.sign(state.rudder) : 1;
-      const escapeHeading = wrapDegrees(baseHeading + steer * state.escapeAngle);
+      const escapeHeading = wrapDegrees(baseHeading + steer * GROUND_ESCAPE_ANGLE_DEG);
       effectiveSpeed = Math.min(Math.abs(speedMps), boat.maxSpeed * 0.08);
       state.velocityMps = Math.sign(speedMps) * effectiveSpeed;
       next = latLngFromDistance(state.boatLatLng, escapeHeading, effectiveSpeed * deltaSeconds);
@@ -887,7 +878,7 @@ async function tick(now) {
     }
   }
 
-  helmWheel.style.transform = `rotate(${state.targetRudder * 78}deg)`;
+  helmWheel.style.transform = `rotate(${state.rudder * 118}deg)`;
   helm.setAttribute('aria-valuenow', state.targetRudder.toFixed(2));
   updatePortState();
   discoverPortsNearBoat(false);
@@ -912,11 +903,10 @@ function saveTick(now) {
 function setRudderFromPointer(event) {
   const rect = helm.getBoundingClientRect();
   const cx = rect.left + rect.width / 2;
-  const cy = rect.top + rect.height / 2;
   const dx = event.clientX - cx;
-  const dy = event.clientY - cy;
-  const angle = Math.atan2(dy, dx) + Math.PI / 2;
-  state.targetRudder = clamp(Math.sin(angle), -1, 1);
+  const raw = clamp(dx / (rect.width * 0.42), -1, 1);
+  const fineControl = Math.sign(raw) * Math.abs(raw) ** 0.82;
+  state.targetRudder = Math.abs(fineControl) < 0.05 ? 0 : fineControl;
 }
 
 function setThrottleFromPointer(event) {
@@ -928,7 +918,6 @@ function setThrottleFromPointer(event) {
   }
   if (Math.abs(state.throttle) > 0.02) {
     state.anchored = false;
-    anchorButton.classList.remove('is-on');
   }
   saveSoon();
 }
@@ -996,12 +985,15 @@ function closeGpsMap() {
 }
 
 helm.addEventListener('pointerdown', (event) => {
+  event.preventDefault();
+  helm.classList.add('is-steering');
   helm.setPointerCapture(event.pointerId);
   setRudderFromPointer(event);
 });
 
 helm.addEventListener('pointermove', (event) => {
   if (helm.hasPointerCapture(event.pointerId)) {
+    event.preventDefault();
     setRudderFromPointer(event);
   }
 });
@@ -1010,10 +1002,12 @@ helm.addEventListener('pointerup', (event) => {
   if (helm.hasPointerCapture(event.pointerId)) {
     helm.releasePointerCapture(event.pointerId);
   }
+  helm.classList.remove('is-steering');
   state.targetRudder = 0;
 });
 
 helm.addEventListener('pointercancel', () => {
+  helm.classList.remove('is-steering');
   state.targetRudder = 0;
 });
 
@@ -1046,12 +1040,6 @@ throttle.addEventListener('keydown', (event) => {
   }
 });
 
-escapeAngle.addEventListener('input', () => {
-  state.escapeAngle = clamp(Number(escapeAngle.value) || 0, 0, 75);
-  updateEscapeControl();
-  saveSoon();
-});
-
 map.on('click', (event) => {
   placeBoat(event.latlng);
 });
@@ -1067,7 +1055,6 @@ map.on('moveend', () => {
   state.boatLatLng = previousPosition;
 });
 
-anchorButton.addEventListener('click', () => setAnchored(!state.anchored));
 fleetButton.addEventListener('click', () => fleetPanel.classList.add('is-open'));
 closeFleetButton.addEventListener('click', () => fleetPanel.classList.remove('is-open'));
 closeDockButton.addEventListener('click', () => {
