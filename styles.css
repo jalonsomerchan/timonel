@@ -171,14 +171,16 @@ button {
 
 .hud {
   position: fixed;
-  left: max(14px, env(safe-area-inset-left));
-  right: max(14px, env(safe-area-inset-right));
+  left: max(8px, env(safe-area-inset-left));
+  right: max(8px, env(safe-area-inset-right));
   z-index: 520;
-  display: flex;
+  height: 42px;
+  padding: 4px;
+  display: grid;
+  grid-template-columns: 34px minmax(44px, 0.9fr) auto 58px auto minmax(48px, 0.8fr);
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  pointer-events: none;
+  gap: 6px;
+  pointer-events: auto;
 }
 
 .hud-top {
@@ -186,7 +188,6 @@ button {
 }
 
 .readout,
-.status-panel,
 .gps,
 .dock-panel,
 .fleet-panel,
@@ -201,8 +202,8 @@ button {
 
 .readout {
   min-width: 0;
-  height: 48px;
-  padding: 6px 14px;
+  height: 32px;
+  padding: 4px 8px;
   display: grid;
   align-content: center;
   justify-items: center;
@@ -211,7 +212,7 @@ button {
 
 .readout span,
 .readout strong {
-  max-width: 46vw;
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -225,8 +226,46 @@ button {
 }
 
 .readout strong {
-  font-size: 17px;
+  font-size: 15px;
   line-height: 1.05;
+}
+
+.hud-boat,
+.hud-zone,
+.hud-money {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hud-boat,
+.hud-zone {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1;
+}
+
+.hud-money {
+  color: var(--accent);
+  font-size: 12px;
+  text-align: right;
+}
+
+.hud-meter {
+  height: 8px;
+  min-width: 44px;
+  overflow: hidden;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.hud-meter i {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--danger), var(--accent), var(--accent-2));
 }
 
 .icon-button,
@@ -241,8 +280,8 @@ button {
 }
 
 .icon-button {
-  width: 48px;
-  height: 48px;
+  width: 34px;
+  height: 34px;
   display: grid;
   place-items: center;
   box-shadow: var(--shadow);
@@ -261,61 +300,28 @@ button {
   color: var(--accent);
 }
 
-.status-panel {
+.cargo-strip {
   position: fixed;
-  left: max(14px, env(safe-area-inset-left));
-  top: calc(max(12px, env(safe-area-inset-top)) + 60px);
+  left: max(8px, env(safe-area-inset-left));
+  right: max(150px, env(safe-area-inset-right));
+  top: calc(max(12px, env(safe-area-inset-top)) + 48px);
   z-index: 520;
-  width: min(210px, calc(100vw - 28px));
-  padding: 10px;
-  display: grid;
-  gap: 7px;
-}
-
-.status-panel > div:first-child {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.status-panel span,
-.status-panel small,
-.gps small {
-  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(8, 17, 20, 0.72);
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1;
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
-.status-panel span {
-  font-size: 12px;
-  color: var(--muted);
-}
-
-.status-panel strong {
-  font-size: 14px;
-  color: var(--accent);
-}
-
-.status-panel small {
-  font-size: 11px;
-  color: var(--muted);
-}
-
-.meter {
-  height: 7px;
-  overflow: hidden;
-  border-radius: 99px;
-  background: rgba(255, 255, 255, 0.12);
-}
-
-.meter i {
-  display: block;
-  width: 100%;
-  height: 100%;
-  border-radius: inherit;
-  background: linear-gradient(90deg, var(--danger), var(--accent), var(--accent-2));
+@media (max-width: 430px) {
+  .cargo-strip {
+    max-width: 210px;
+  }
 }
 
 .gps {
@@ -886,11 +892,13 @@ button {
   .hud {
     left: 24px;
     right: auto;
-    width: 360px;
+    width: 520px;
   }
 
-  .status-panel {
+  .cargo-strip {
     left: 24px;
+    right: auto;
+    width: 360px;
   }
 
   .gps {

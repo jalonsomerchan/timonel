@@ -21,22 +21,18 @@
 
       <div class="hud hud-top">
         <button id="fleetButton" class="icon-button" type="button" aria-label="Abrir flota">▣</button>
+        <span id="boatNameLabel" class="hud-boat">Yate</span>
         <div class="readout">
-          <span id="zoneLabel">Puerto de Ares</span>
           <strong id="speedLabel">0.0 kn</strong>
         </div>
-      </div>
-
-      <aside id="statusPanel" class="status-panel" aria-label="Estado del barco">
-        <div>
-          <span id="boatNameLabel">Yate</span>
-          <strong id="moneyLabel">€0</strong>
-        </div>
-        <div class="meter">
+        <div class="hud-meter" aria-label="Combustible">
           <i id="fuelBar"></i>
         </div>
-        <small id="cargoLabel">Sin carga</small>
-      </aside>
+        <strong id="moneyLabel" class="hud-money">€0</strong>
+        <span id="zoneLabel" class="hud-zone">Ares</span>
+      </div>
+
+      <small id="cargoLabel" class="cargo-strip">Sin carga</small>
 
       <button id="gps" class="gps" type="button" aria-label="Abrir mapa GPS">
         <span id="gpsArrow">➤</span>

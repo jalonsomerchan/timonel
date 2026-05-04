@@ -787,8 +787,8 @@ function updateReadouts() {
     cargoLabel.textContent = `${state.mission.amount} ${state.mission.type} → ${target.name}`;
     gps.classList.add('is-active');
     gpsLabel.textContent = `${target.name} · ${distanceKm.toFixed(1)} km`;
-    const relativeBearing = wrapDegrees(bearingTo(state.boatLatLng, getPortLatLng(target)) - state.heading);
-    gpsArrow.style.transform = `rotate(${relativeBearing}deg)`;
+    const targetBearing = bearingTo(state.boatLatLng, getPortLatLng(target));
+    gpsArrow.style.transform = `rotate(${targetBearing}deg)`;
   } else {
     cargoLabel.textContent = `Cap. ${boat.capacity} ${boat.cargoType} · ${(boat.maxSpeed * 1.94384).toFixed(0)} kn`;
     gps.classList.remove('is-active');
@@ -966,6 +966,27 @@ function openGpsMap() {
 
     gpsMap.invalidateSize();
     gpsRouteLayer.clearLayers();
+    const boundsPoints = [state.boatLatLng, destination];
+    const nearbyPorts = allPorts()
+      .filter((port) => port.id !== target.id)
+      .map((port) => ({ port, distance: Math.min(distanceMeters(state.boatLatLng, getPortLatLng(port)), distanceMeters(destination, getPortLatLng(port))) }))
+      .filter((item) => item.distance <= OSM_PORT_RADIUS_M)
+      .sort((a, b) => a.distance - b.distance)
+      .slice(0, 16);
+
+    nearbyPorts.forEach(({ port }) => {
+      const portLatLng = getPortLatLng(port);
+      boundsPoints.push(portLatLng);
+      const marker = L.circleMarker(portLatLng, {
+        radius: 4,
+        color: '#f5f7ec',
+        fillColor: port.source === 'osm' ? '#9fb6bd' : '#f5f7ec',
+        fillOpacity: 0.74,
+        weight: 1,
+      }).bindTooltip(port.name, { direction: 'top', opacity: 0.9 });
+      gpsRouteLayer.addLayer(marker);
+    });
+
     const here = L.circleMarker(state.boatLatLng, {
       radius: 7,
       color: '#44d4ca',
@@ -990,7 +1011,7 @@ function openGpsMap() {
     gpsRouteLayer.addLayer(line);
     gpsRouteLayer.addLayer(here);
     gpsRouteLayer.addLayer(there);
-    gpsMap.fitBounds(L.latLngBounds([state.boatLatLng, destination]).pad(0.35), { animate: false });
+    gpsMap.fitBounds(L.latLngBounds(boundsPoints).pad(0.24), { animate: false });
   }, 80);
 }
 
