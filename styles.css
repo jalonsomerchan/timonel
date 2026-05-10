@@ -318,6 +318,44 @@ button {
   text-overflow: ellipsis;
 }
 
+.port-loading {
+  position: fixed;
+  left: max(8px, env(safe-area-inset-left));
+  top: calc(max(12px, env(safe-area-inset-top)) + 78px);
+  z-index: 522;
+  display: none;
+  width: max-content;
+  max-width: min(78vw, 320px);
+  padding: 7px 10px 7px 28px;
+  border: 1px solid rgba(68, 212, 202, 0.34);
+  border-radius: 999px;
+  background: rgba(8, 17, 20, 0.78);
+  color: var(--muted);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(14px);
+  font-size: 10px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.port-loading.is-visible {
+  display: block;
+}
+
+.port-loading::before {
+  content: "";
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  width: 9px;
+  height: 9px;
+  margin-top: -5px;
+  border: 2px solid rgba(68, 212, 202, 0.22);
+  border-top-color: var(--accent-2);
+  border-radius: 50%;
+  animation: spin 760ms linear infinite;
+}
+
 @media (max-width: 430px) {
   .cargo-strip {
     max-width: 210px;
@@ -376,6 +414,42 @@ button {
   display: grid;
   place-items: center;
   pointer-events: none;
+}
+
+.traffic-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 445;
+  pointer-events: none;
+}
+
+.traffic-boat {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: calc(78px * var(--traffic-scale, 1));
+  height: calc(78px * var(--traffic-scale, 1));
+  object-fit: contain;
+  image-rendering: pixelated;
+  filter: drop-shadow(0 7px 3px rgba(0, 0, 0, 0.42));
+  transform-origin: 50% 50%;
+  will-change: transform;
+}
+
+.fish-marker {
+  display: grid;
+  place-items: center;
+  width: 54px;
+  height: 54px;
+}
+
+.fish-marker img {
+  width: 50px;
+  height: 50px;
+  object-fit: contain;
+  image-rendering: pixelated;
+  filter: drop-shadow(0 6px 3px rgba(0, 0, 0, 0.42));
+  animation: fishPulse 1200ms ease-in-out infinite;
 }
 
 .boat-sprite {
@@ -888,6 +962,23 @@ button {
   }
 }
 
+@keyframes spin {
+  to {
+    rotate: 360deg;
+  }
+}
+
+@keyframes fishPulse {
+  0%, 100% {
+    translate: 0 -2px;
+    scale: 0.96;
+  }
+  50% {
+    translate: 0 2px;
+    scale: 1.04;
+  }
+}
+
 @media (min-width: 760px) {
   .hud {
     left: 24px;
@@ -899,6 +990,10 @@ button {
     left: 24px;
     right: auto;
     width: 360px;
+  }
+
+  .port-loading {
+    left: 24px;
   }
 
   .gps {

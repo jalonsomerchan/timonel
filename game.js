@@ -11,11 +11,23 @@ const MAX_YAW_DEG = 44;
 const WATER_SAMPLE_INTERVAL = 360;
 const OSM_PORT_RADIUS_M = 130000;
 const OSM_PORT_REFRESH_M = 18000;
-const OVERPASS_URL = 'https://overpass-api.de/api/interpreter';
+const OVERPASS_URLS = [
+  'https://overpass-api.de/api/interpreter',
+  'https://overpass.kumi.systems/api/interpreter',
+  'https://overpass.openstreetmap.ru/api/interpreter',
+];
 const GROUND_ESCAPE_ANGLE_DEG = 35;
-const MIN_PORT_SEPARATION_M = 20000;
-const MIN_MISSION_DISTANCE_M = 50000;
+const MIN_PORT_SEPARATION_M = 2500;
+const MIN_MISSION_DISTANCE_M = 20000;
 const FUEL_BURN_MULTIPLIER = 4;
+const TRAFFIC_BOAT_COUNT = 8;
+const TRAFFIC_RESPAWN_DISTANCE_M = 3600;
+const TRAFFIC_COLLISION_COOLDOWN_MS = 1300;
+const TRAFFIC_WATER_SAMPLE_INTERVAL = 850;
+const FISH_PICKUP_RADIUS_M = 85;
+const FISH_SPAWN_INTERVAL_MS = 1400;
+const FISH_SCHOOL_MAX = 5;
+const FISH_SCHOOL_TTL_MS = 28000;
 const SAVE_KEY = 'boat-map-save-v2';
 const ARES = L.latLng(43.424399, -8.23971);
 
@@ -68,6 +80,19 @@ const BOATS = {
     spriteScale: 1.72,
     color: '#d8eef0',
   },
+  fishing: {
+    id: 'fishing',
+    name: 'Pesquero',
+    cargoType: 'pescado',
+    capacity: 80,
+    maxSpeed: 9.6 * SPEED_MULTIPLIER,
+    fuelMax: 980,
+    fuelBurn: 0.040,
+    sprite: 'assets/boats/fishing/fishing',
+    spriteScale: 1.16,
+    color: '#6fb7ff',
+    fishing: true,
+  },
 };
 
 const BASE_PORTS = [
@@ -97,6 +122,8 @@ const state = {
   osmPorts: [],
   lastOsmFetchLatLng: null,
   osmFetchInFlight: false,
+  osmFetchAttempt: 0,
+  portLoading: false,
   dockOpen: true,
   grounded: false,
   lastTime: performance.now(),
@@ -107,6 +134,11 @@ const state = {
   toastTimer: 0,
   saveTimer: 0,
   started: false,
+  trafficBoats: [],
+  lastTrafficCollision: 0,
+  lastMissionWarning: 0,
+  fishSchools: [],
+  lastFishSpawn: 0,
 };
 
 const map = L.map('map', {
@@ -127,7 +159,9 @@ L.tileLayer(SATELLITE_URL, {
 }).addTo(map);
 
 const portLayer = L.layerGroup().addTo(map);
+const fishLayer = L.layerGroup().addTo(map);
 
+const trafficLayer = document.getElementById('trafficLayer');
 const boatLayer = document.getElementById('boatLayer');
 const boatSprite = document.getElementById('boatSprite');
 const wake = document.getElementById('wake');
@@ -157,6 +191,7 @@ const boatNameLabel = document.getElementById('boatNameLabel');
 const moneyLabel = document.getElementById('moneyLabel');
 const fuelBar = document.getElementById('fuelBar');
 const cargoLabel = document.getElementById('cargoLabel');
+const portLoading = document.getElementById('portLoading');
 const gps = document.getElementById('gps');
 const gpsArrow = document.getElementById('gpsArrow');
 const gpsLabel = document.getElementById('gpsLabel');
@@ -337,6 +372,18 @@ function getPortLatLng(port) {
   return L.latLng(port.lat, port.lng);
 }
 
+function nearestPort(latLng = state.boatLatLng) {
+  return allPorts()
+    .map((port) => ({ port, distance: distanceMeters(latLng, getPortLatLng(port)) }))
+    .sort((a, b) => a.distance - b.distance)[0] || null;
+}
+
+function setPortLoading(value, message = 'Buscando puertos...') {
+  state.portLoading = value;
+  portLoading.textContent = message;
+  portLoading.classList.toggle('is-visible', value);
+}
+
 function findDockedPort() {
   if (!state.boatLatLng) {
     return null;
@@ -360,11 +407,30 @@ function missionSeed(fromPort, targetPort, index, boat) {
   };
 }
 
+function fishingMissionSeed(fromPort, boat) {
+  const amount = boat.capacity;
+  return {
+    id: `fish-${fromPort.id}-${boat.id}`,
+    kind: 'fishing',
+    type: boat.cargoType,
+    amount,
+    from: fromPort.id,
+    to: fromPort.id,
+    caught: 0,
+    reward: Math.round(amount * 11),
+    distanceKm: 0,
+  };
+}
+
 function availableMissions() {
   const currentPort = getPort(state.currentPortId);
   const boat = getBoat();
   if (!currentPort) {
     return [];
+  }
+
+  if (boat.fishing) {
+    return [fishingMissionSeed(currentPort, boat)];
   }
 
   return allPorts()
@@ -412,6 +478,11 @@ function loadGame() {
     state.fuel = clamp(Number(payload.fuel) || BOATS[payload.boatId].fuelMax, 0, BOATS[payload.boatId].fuelMax);
     state.money = Number(payload.money) || 0;
     state.mission = payload.mission || null;
+    if (state.mission?.kind === 'fishing') {
+      state.mission.caught = clamp(Number(state.mission.caught) || (state.mission.pickedUp ? state.mission.amount : 0), 0, state.mission.amount);
+      delete state.mission.pickup;
+      delete state.mission.pickedUp;
+    }
     state.currentPortId = payload.currentPortId || null;
     state.osmPorts = Array.isArray(payload.osmPorts) ? payload.osmPorts.slice(0, 120) : [];
     state.velocityMps = clamp(Number(payload.velocityMps) || 0, -BOATS[payload.boatId].maxSpeed * 0.38, BOATS[payload.boatId].maxSpeed);
@@ -432,12 +503,18 @@ function newGame() {
   state.currentPortId = 'ares';
   state.osmPorts = [];
   state.lastOsmFetchLatLng = null;
+  state.osmFetchAttempt = 0;
   state.throttle = 0;
   state.velocityMps = 0;
   state.yawVelocity = 0;
   state.grounded = false;
   state.anchored = true;
   state.dockOpen = true;
+  state.trafficBoats = [];
+  trafficLayer.innerHTML = '';
+  state.fishSchools = [];
+  state.lastFishSpawn = 0;
+  fishLayer.clearLayers();
 }
 
 function startGame(useSave) {
@@ -569,6 +646,7 @@ async function discoverPortsNearBoat(force = false) {
 
   state.osmFetchInFlight = true;
   state.lastOsmFetchLatLng = L.latLng(state.boatLatLng.lat, state.boatLatLng.lng);
+  setPortLoading(true, force ? 'Cargando puertos cercanos...' : 'Actualizando puertos...');
   const { lat, lng } = state.boatLatLng;
   const query = `
     [out:json][timeout:14];
@@ -590,11 +668,27 @@ async function discoverPortsNearBoat(force = false) {
   `;
 
   try {
-    const response = await fetch(`${OVERPASS_URL}?data=${encodeURIComponent(query)}`);
-    if (!response.ok) {
-      throw new Error(`Overpass ${response.status}`);
+    let data = null;
+    let lastError = null;
+    const startIndex = state.osmFetchAttempt % OVERPASS_URLS.length;
+    for (let attempt = 0; attempt < OVERPASS_URLS.length; attempt += 1) {
+      const url = OVERPASS_URLS[(startIndex + attempt) % OVERPASS_URLS.length];
+      try {
+        const response = await fetch(`${url}?data=${encodeURIComponent(query)}`);
+        if (!response.ok) {
+          throw new Error(`Overpass ${response.status}`);
+        }
+        data = await response.json();
+        state.osmFetchAttempt = startIndex + attempt;
+        break;
+      } catch (error) {
+        lastError = error;
+      }
     }
-    const data = await response.json();
+
+    if (!data) {
+      throw lastError || new Error('Overpass no respondió');
+    }
     const discovered = normalizeOsmPorts(data.elements || []);
     if (discovered.length) {
       mergeOsmPorts(discovered);
@@ -604,11 +698,15 @@ async function discoverPortsNearBoat(force = false) {
         renderMissions(missionsList.classList.contains('is-open'));
       }
       saveSoon();
+    } else if (force) {
+      showToast('No encontré puertos nuevos por aquí.');
     }
   } catch (error) {
     console.warn('OSM port discovery failed', error);
+    showToast('No pude cargar puertos online. Mantengo los conocidos.');
   } finally {
     state.osmFetchInFlight = false;
+    setPortLoading(false);
   }
 }
 
@@ -663,18 +761,33 @@ function renderMissions(forceOpen = true) {
   }
   if (state.mission) {
     const target = getPort(state.mission.to);
-    missionsList.innerHTML = `<p>Misión activa hacia ${target.name}. ${state.mission.amount} ${state.mission.type}.</p>`;
+    const detail = state.mission.kind === 'fishing' && !isFishingHoldFull()
+      ? `Navega y recoge pescado: ${Math.floor(state.mission.caught || 0)}/${state.mission.amount}.`
+      : `Rumbo a ${target.name}. ${state.mission.amount} ${state.mission.type}.`;
+    missionsList.innerHTML = `<p>${detail}</p>`;
     return;
   }
 
-  availableMissions().forEach((mission) => {
+  const missions = availableMissions();
+  if (!missions.length) {
+    missionsList.innerHTML = getBoat().fishing
+      ? '<p>Cargando puertos o sin destinos cercanos todavía.</p>'
+      : '<p>Cargando puertos o sin destinos a 20 km todavía.</p>';
+    return;
+  }
+
+  missions.forEach((mission) => {
     const target = getPort(mission.to);
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'mission-card';
+    const title = mission.kind === 'fishing' ? `Pescar desde ${target.name}` : target.name;
+    const detail = mission.kind === 'fishing'
+      ? `${mission.amount} ${mission.type} · vuelve al mismo puerto · €${mission.reward}`
+      : `${mission.amount} ${mission.type} · ${mission.distanceKm.toFixed(1)} km · €${mission.reward}`;
     button.innerHTML = `
-      <strong>${target.name}</strong>
-      <span>${mission.amount} ${mission.type} · ${mission.distanceKm.toFixed(1)} km · €${mission.reward}</span>
+      <strong>${title}</strong>
+      <span>${detail}</span>
     `;
     button.addEventListener('click', () => acceptMission(mission));
     missionsList.appendChild(button);
@@ -691,7 +804,7 @@ function acceptMission(mission) {
   renderDock();
   renderPorts();
   updateReadouts();
-  showToast(`Rumbo a ${getPort(mission.to).name}.`);
+  showToast(mission.kind === 'fishing' ? 'Navega por agua abierta: irán apareciendo peces.' : `Rumbo a ${getPort(mission.to).name}.`);
   saveSoon();
 }
 
@@ -703,6 +816,7 @@ function completeMission() {
   const target = getPort(mission.to);
   state.money += mission.reward;
   state.mission = null;
+  clearFishSchools();
   state.currentPortId = target.id;
   state.dockOpen = true;
   setAnchored(true);
@@ -741,6 +855,13 @@ function updateBoatAsset() {
   boatNameLabel.textContent = boat.name;
   document.documentElement.style.setProperty('--accent-boat', boat.color);
   document.documentElement.style.setProperty('--boat-scale', boat.spriteScale);
+  state.trafficBoats.forEach((traffic) => {
+    traffic.el.style.setProperty('--traffic-scale', boat.spriteScale);
+  });
+}
+
+function isFishingHoldFull() {
+  return state.mission?.kind === 'fishing' && (state.mission.caught || 0) >= state.mission.amount;
 }
 
 function updatePortState() {
@@ -748,8 +869,16 @@ function updatePortState() {
   const previousPort = state.currentPortId;
   state.currentPortId = port ? port.id : null;
 
-  if (port && state.mission && state.mission.to === port.id) {
+  const canCompleteMission = state.mission && state.mission.to === port?.id && (state.mission.kind !== 'fishing' || isFishingHoldFull());
+  if (port && canCompleteMission) {
     completeMission();
+  } else if (port && state.mission?.kind === 'fishing' && state.mission.to === port.id && !isFishingHoldFull()) {
+    state.dockOpen = false;
+    const now = performance.now();
+    if (now - state.lastMissionWarning > 2500) {
+      state.lastMissionWarning = now;
+      showToast('Llena el pesquero antes de entregar.');
+    }
   } else if (port && previousPort !== port.id) {
     state.dockOpen = true;
     showToast(`Atracando en ${port.name}.`);
@@ -760,6 +889,29 @@ function updatePortState() {
   }
 
   renderPorts();
+}
+
+function gpsTarget() {
+  if (state.mission) {
+    const target = getPort(state.mission.to);
+    return {
+      name: target.name,
+      latLng: getPortLatLng(target),
+      active: true,
+      routeTitle: `Ruta a ${target.name}`,
+    };
+  }
+
+  const nearest = nearestPort();
+  if (!nearest) {
+    return null;
+  }
+  return {
+    name: nearest.port.name,
+    latLng: getPortLatLng(nearest.port),
+    active: false,
+    routeTitle: `Puerto más cercano: ${nearest.port.name}`,
+  };
 }
 
 function updateReadouts() {
@@ -781,19 +933,30 @@ function updateReadouts() {
     zoneLabel.textContent = state.lastWater ? 'Agua abierta' : 'Costa';
   }
 
-  if (state.mission) {
-    const target = getPort(state.mission.to);
-    const distanceKm = distanceMeters(state.boatLatLng, getPortLatLng(target)) / 1000;
-    cargoLabel.textContent = `${state.mission.amount} ${state.mission.type} → ${target.name}`;
+  const target = gpsTarget();
+  if (state.mission && target) {
+    const destinationName = getPort(state.mission.to).name;
+    const distanceKm = distanceMeters(state.boatLatLng, target.latLng) / 1000;
+    const cargoText = state.mission.kind === 'fishing' && !isFishingHoldFull()
+      ? `${Math.floor(state.mission.caught || 0)}/${state.mission.amount} ${state.mission.type} · pescando`
+      : `${state.mission.amount} ${state.mission.type} → ${destinationName}`;
+    cargoLabel.textContent = cargoText;
     gps.classList.add('is-active');
-    gpsLabel.textContent = `${target.name} · ${distanceKm.toFixed(1)} km`;
-    const targetBearing = bearingTo(state.boatLatLng, getPortLatLng(target));
-    gpsArrow.style.transform = `rotate(${targetBearing}deg)`;
+    gpsLabel.textContent = state.mission.kind === 'fishing' && !isFishingHoldFull()
+      ? `${destinationName} · llena bodega`
+      : `${target.name} · ${distanceKm.toFixed(1)} km`;
   } else {
     cargoLabel.textContent = `Cap. ${boat.capacity} ${boat.cargoType} · ${(boat.maxSpeed * 1.94384).toFixed(0)} kn`;
     gps.classList.remove('is-active');
-    gpsLabel.textContent = 'Sin destino';
-    gpsArrow.style.transform = 'rotate(0deg)';
+    gpsLabel.textContent = target ? `${target.name} cerca` : 'Sin destino';
+  }
+
+  if (target) {
+    const targetBearing = bearingTo(state.boatLatLng, target.latLng);
+    const relativeBearing = wrapDegrees(targetBearing - state.heading - 90);
+    gpsArrow.style.transform = `rotate(${relativeBearing}deg)`;
+  } else {
+    gpsArrow.style.transform = 'rotate(-90deg)';
   }
 
   throttleKnob.style.top = `${50 - state.throttle * 42}%`;
@@ -816,6 +979,233 @@ function updateBoatVisual(deltaMs) {
   boatSprite.style.transform = `rotate(${state.heading}deg)`;
   wake.style.transform = `rotate(${state.heading}deg)`;
   boatLayer.classList.toggle('is-sailing', Math.abs(currentSpeedMps()) > 0.2);
+}
+
+function fishIconHtml(frame = 1) {
+  return `<img src="assets/fish/fish-${frame}.png" alt="">`;
+}
+
+function makeFishMarker(school) {
+  const icon = L.divIcon({
+    className: 'fish-marker',
+    html: fishIconHtml(school.frame),
+    iconSize: [54, 54],
+    iconAnchor: [27, 27],
+  });
+  return L.marker(school.latLng, { icon }).bindTooltip(`${school.amount} pescado`, { direction: 'top', opacity: 0.92 });
+}
+
+function renderFishSchools() {
+  fishLayer.clearLayers();
+  state.fishSchools.forEach((school) => {
+    school.marker = makeFishMarker(school);
+    school.marker.addTo(fishLayer);
+  });
+}
+
+function clearFishSchools() {
+  state.fishSchools = [];
+  fishLayer.clearLayers();
+}
+
+async function spawnFishSchool(now) {
+  const speedRatio = clamp(Math.abs(currentSpeedMps()) / Math.max(1, getBoat().maxSpeed), 0, 1);
+  const chance = 0.16 + speedRatio * 0.28;
+  if (Math.random() > chance || state.fishSchools.length >= FISH_SCHOOL_MAX) {
+    return;
+  }
+
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const ahead = state.velocityMps >= 0 ? state.heading : wrapDegrees(state.heading + 180);
+    const angle = wrapDegrees(ahead + (Math.random() - 0.5) * 115);
+    const distance = 520 + Math.random() * 1150;
+    const latLng = latLngFromDistance(state.boatLatLng, angle, distance);
+    const tooCloseToPort = allPorts().some((port) => distanceMeters(latLng, getPortLatLng(port)) < port.radius + 360);
+    const tooCloseToFish = state.fishSchools.some((school) => distanceMeters(latLng, school.latLng) < 520);
+    if (!tooCloseToPort && !tooCloseToFish && await isWater(latLng)) {
+      state.fishSchools.push({
+        id: `fish-${Math.round(now)}-${Math.round(Math.random() * 99999)}`,
+        latLng,
+        amount: 8 + Math.floor(Math.random() * 13),
+        frame: 1 + Math.floor(Math.random() * 4),
+        createdAt: now,
+      });
+      renderFishSchools();
+      return;
+    }
+  }
+}
+
+async function updateFishing(deltaSeconds, now) {
+  if (state.mission?.kind !== 'fishing') {
+    if (state.fishSchools.length) {
+      clearFishSchools();
+    }
+    return;
+  }
+
+  if (isFishingHoldFull()) {
+    if (state.fishSchools.length) {
+      clearFishSchools();
+    }
+    return;
+  }
+
+  const beforeCount = state.fishSchools.length;
+  state.fishSchools = state.fishSchools.filter((school) => now - school.createdAt < FISH_SCHOOL_TTL_MS);
+  if (state.fishSchools.length !== beforeCount) {
+    renderFishSchools();
+  }
+
+  for (const school of [...state.fishSchools]) {
+    if (distanceMeters(state.boatLatLng, school.latLng) <= FISH_PICKUP_RADIUS_M) {
+      const remaining = state.mission.amount - (state.mission.caught || 0);
+      const caught = Math.min(remaining, school.amount);
+      state.mission.caught = Math.min(state.mission.amount, (state.mission.caught || 0) + caught);
+      state.fishSchools = state.fishSchools.filter((item) => item.id !== school.id);
+      renderFishSchools();
+      showToast(`+${caught} pescado (${Math.floor(state.mission.caught)}/${state.mission.amount}).`);
+      saveSoon();
+
+      if (isFishingHoldFull()) {
+        clearFishSchools();
+        showToast(`Bodega llena. Vuelve a ${getPort(state.mission.to).name}.`);
+      }
+      break;
+    }
+  }
+
+  if (Math.abs(currentSpeedMps()) > 0.8 && state.lastWater && now - state.lastFishSpawn > FISH_SPAWN_INTERVAL_MS) {
+    state.lastFishSpawn = now;
+    await spawnFishSchool(now);
+  }
+}
+
+function trafficBoatTypes() {
+  return ['yacht', 'speedboat', 'cargo', 'oceanliner', 'fishing']
+    .filter((id) => !(state.boatId === 'fishing' && id === 'fishing'));
+}
+
+async function trafficSpawnPoint() {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const distance = 900 + Math.random() * 2300;
+    const bearing = Math.random() * 360;
+    const latLng = latLngFromDistance(state.boatLatLng, bearing, distance);
+    if (await isWater(latLng)) {
+      return { latLng, bearing };
+    }
+  }
+
+  return { latLng: state.boatLatLng, bearing: Math.random() * 360 };
+}
+
+async function createTrafficBoat(index) {
+  const ids = trafficBoatTypes();
+  const boatId = ids[index % ids.length];
+  const { latLng, bearing } = await trafficSpawnPoint();
+  const heading = wrapDegrees(bearing + 70 + Math.random() * 220);
+  const boat = BOATS[boatId];
+  const el = document.createElement('img');
+  el.className = 'traffic-boat';
+  el.src = `${boat.sprite}-1.png`;
+  el.alt = '';
+  el.style.setProperty('--traffic-scale', getBoat().spriteScale);
+  trafficLayer.appendChild(el);
+  return {
+    id: `traffic-${Date.now()}-${index}-${Math.round(Math.random() * 9999)}`,
+    boatId,
+    latLng,
+    heading,
+    speed: boat.maxSpeed * (0.16 + Math.random() * 0.18),
+    turn: (Math.random() - 0.5) * 4,
+    lastWaterCheck: 0,
+    el,
+  };
+}
+
+async function ensureTrafficBoats() {
+  while (state.trafficBoats.length < TRAFFIC_BOAT_COUNT) {
+    state.trafficBoats.push(await createTrafficBoat(state.trafficBoats.length));
+  }
+}
+
+async function respawnTrafficBoat(traffic, index) {
+  traffic.el.remove();
+  state.trafficBoats[index] = await createTrafficBoat(index);
+}
+
+function handleTrafficCollision(traffic, now) {
+  const ownRadius = 42 * getBoat().spriteScale;
+  const otherRadius = 38 * getBoat().spriteScale;
+  if (distanceMeters(state.boatLatLng, traffic.latLng) > ownRadius + otherRadius) {
+    return;
+  }
+
+  const away = bearingTo(traffic.latLng, state.boatLatLng);
+  state.boatLatLng = latLngFromDistance(state.boatLatLng, away, 18);
+  map.panTo(state.boatLatLng, { animate: false });
+  state.heading = wrapDegrees(away + 18);
+  state.velocityMps *= -0.24;
+  state.throttle = 0;
+  traffic.heading = wrapDegrees(away + 180);
+  traffic.speed *= 0.72;
+
+  if (now - state.lastTrafficCollision > TRAFFIC_COLLISION_COOLDOWN_MS) {
+    state.lastTrafficCollision = now;
+    showToast('Choque con tráfico marítimo. Timón al centro.');
+  }
+}
+
+async function waterSafeTrafficStep(traffic, distance, now) {
+  const next = latLngFromDistance(traffic.latLng, traffic.heading, distance);
+  if (now - traffic.lastWaterCheck < TRAFFIC_WATER_SAMPLE_INTERVAL) {
+    return next;
+  }
+
+  traffic.lastWaterCheck = now;
+  if (await isWater(next)) {
+    return next;
+  }
+
+  const headingOptions = [45, -45, 90, -90, 135, -135, 180];
+  for (const offset of headingOptions) {
+    const candidateHeading = wrapDegrees(traffic.heading + offset);
+    const candidate = latLngFromDistance(traffic.latLng, candidateHeading, distance);
+    if (await isWater(candidate)) {
+      traffic.heading = candidateHeading;
+      traffic.turn *= -0.45;
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
+async function updateTrafficBoats(deltaSeconds, now) {
+  await ensureTrafficBoats();
+  for (let index = 0; index < state.trafficBoats.length; index += 1) {
+    const traffic = state.trafficBoats[index];
+    traffic.heading = wrapDegrees(traffic.heading + traffic.turn * deltaSeconds);
+    const next = await waterSafeTrafficStep(traffic, traffic.speed * deltaSeconds, now);
+
+    if (!next || distanceMeters(state.boatLatLng, traffic.latLng) > TRAFFIC_RESPAWN_DISTANCE_M) {
+      await respawnTrafficBoat(traffic, index);
+      continue;
+    }
+
+    traffic.latLng = next;
+    handleTrafficCollision(traffic, now);
+  }
+  renderTrafficBoats();
+}
+
+function renderTrafficBoats() {
+  state.trafficBoats.forEach((traffic) => {
+    const point = map.latLngToContainerPoint(traffic.latLng);
+    const isVisible = point.x > -120 && point.y > -120 && point.x < map.getSize().x + 120 && point.y < map.getSize().y + 120;
+    traffic.el.style.display = isVisible ? 'block' : 'none';
+    traffic.el.style.transform = `translate(${point.x}px, ${point.y}px) translate(-50%, -50%) rotate(${traffic.heading}deg)`;
+  });
 }
 
 async function checkNextWater(latLng) {
@@ -895,7 +1285,9 @@ async function tick(now) {
   helmWheel.style.transform = `rotate(${state.rudder * 118}deg)`;
   helm.setAttribute('aria-valuenow', state.targetRudder.toFixed(2));
   updatePortState();
+  await updateFishing(deltaSeconds, now);
   discoverPortsNearBoat(false);
+  await updateTrafficBoats(deltaSeconds, now);
   updateBoatVisual(deltaMs);
   updateReadouts();
   saveTick(now);
@@ -937,16 +1329,16 @@ function setThrottleFromPointer(event) {
 }
 
 function openGpsMap() {
-  if (!state.mission) {
-    showToast('No hay misión activa.');
+  const target = gpsTarget();
+  if (!target) {
+    showToast('Todavía no hay puertos cargados.');
     return;
   }
 
-  const target = getPort(state.mission.to);
-  const destination = getPortLatLng(target);
+  const destination = target.latLng;
   gpsModal.classList.remove('is-hidden');
-  gpsMapTitle.textContent = `Ruta a ${target.name}`;
-  gpsMapInfo.textContent = `${distanceMeters(state.boatLatLng, destination).toFixed(0)} m hasta destino`;
+  gpsMapTitle.textContent = target.routeTitle;
+  gpsMapInfo.textContent = `${distanceMeters(state.boatLatLng, destination).toFixed(0)} m hasta ${target.name}`;
 
   window.setTimeout(() => {
     if (!gpsMap) {
@@ -967,8 +1359,9 @@ function openGpsMap() {
     gpsMap.invalidateSize();
     gpsRouteLayer.clearLayers();
     const boundsPoints = [state.boatLatLng, destination];
+    const targetPort = state.mission ? getPort(state.mission.to) : null;
     const nearbyPorts = allPorts()
-      .filter((port) => port.id !== target.id)
+      .filter((port) => port.id !== targetPort?.id)
       .map((port) => ({ port, distance: Math.min(distanceMeters(state.boatLatLng, getPortLatLng(port)), distanceMeters(destination, getPortLatLng(port))) }))
       .filter((item) => item.distance <= OSM_PORT_RADIUS_M)
       .sort((a, b) => a.distance - b.distance)
@@ -1088,6 +1481,7 @@ map.on('moveend', () => {
   state.boatLatLng = center;
   discoverPortsNearBoat(false);
   state.boatLatLng = previousPosition;
+  renderTrafficBoats();
 });
 
 fleetButton.addEventListener('click', () => fleetPanel.classList.add('is-open'));

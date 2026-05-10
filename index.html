@@ -18,6 +18,7 @@
   <body>
     <main id="game">
       <div id="map" aria-label="Mapa satélite de navegación"></div>
+      <div id="trafficLayer" class="traffic-layer" aria-hidden="true"></div>
 
       <div class="hud hud-top">
         <button id="fleetButton" class="icon-button" type="button" aria-label="Abrir flota">▣</button>
@@ -33,6 +34,7 @@
       </div>
 
       <small id="cargoLabel" class="cargo-strip">Sin carga</small>
+      <small id="portLoading" class="port-loading" role="status" aria-live="polite">Buscando puertos...</small>
 
       <button id="gps" class="gps" type="button" aria-label="Abrir mapa GPS">
         <span id="gpsArrow">➤</span>
